@@ -30,6 +30,9 @@ def _build_system_prompt(skills_dir: Path) -> str:
         "- Read-only SQL only.\n"
         "- Never invent table or column names.\n"
         "- Validate schema using tools before complex queries.\n\n"
+        "- For any data request, you MUST call execute_query and return the actual result rows.\n"
+        "- Do not stop at schema explanation or SQL draft only.\n"
+        "- Show results first, then optionally include the SQL used.\n\n"
         f"{schema_analyzer_skill}\n\n{query_builder_skill}"
     )
 

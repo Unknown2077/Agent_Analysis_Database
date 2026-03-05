@@ -76,3 +76,17 @@ Exit with:
 - Agent behavior is guided by:
   - `skills/schema_analyzer.md`
   - `skills/query_builder.md`
+
+## Automated Checks
+
+Run required local checks (no LLM call):
+
+```bash
+python run_checks.py
+```
+
+Run full checks including live agent calls:
+
+```bash
+python run_checks.py --with-agent
+```

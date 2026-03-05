@@ -8,7 +8,8 @@ Working rules:
 2. Call `table_info` only for tables relevant to the user request.
 3. Identify relationships through key columns such as `*_id` and primary keys.
 4. If relationships are unclear, do not jump into complex queries.
-5. Summarize schema analysis before query execution.
+5. Summarize schema analysis briefly, then continue to query execution.
+6. For data requests, schema analysis is not the final output.
 
 Minimum output:
 - Main tables used.

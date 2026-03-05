@@ -9,8 +9,10 @@ Working rules:
 3. For aggregations, ensure all non-aggregated columns are included in `GROUP BY`.
 4. For ranking, use explicit `ORDER BY` and `LIMIT`.
 5. Avoid `SELECT *`; select only needed columns.
-6. Validate the query before calling `execute_query`.
+6. Validate the query, then call `execute_query`.
+7. For data retrieval questions, do not return SQL-only answers.
+8. Return actual query results in a readable table format.
 
 Minimum output:
+- Query results (rows/columns).
 - Final SQL query.
-- Short reason why the query satisfies the request.
