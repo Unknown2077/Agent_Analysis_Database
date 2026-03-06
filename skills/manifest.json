@@ -1,0 +1,49 @@
+{
+  "skills": [
+    {
+      "id": "schema_analyzer",
+      "file": "schema_analyzer.md",
+      "description": "Analyze table structure and join relationships before querying.",
+      "when_to_use": [
+        "table",
+        "schema",
+        "column",
+        "columns",
+        "relationship",
+        "join",
+        "foreign key",
+        "primary key",
+        "structure"
+      ],
+      "priority": 100,
+      "required_tools": [
+        "list_table",
+        "table_info"
+      ],
+      "max_chars": 1600
+    },
+    {
+      "id": "query_builder",
+      "file": "query_builder.md",
+      "description": "Build accurate read-only SQL and execute queries.",
+      "when_to_use": [
+        "select",
+        "query",
+        "top",
+        "count",
+        "sum",
+        "avg",
+        "total",
+        "revenue",
+        "sales",
+        "result",
+        "rows"
+      ],
+      "priority": 90,
+      "required_tools": [
+        "execute_query"
+      ],
+      "max_chars": 1600
+    }
+  ]
+}
