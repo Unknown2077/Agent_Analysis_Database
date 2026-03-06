@@ -90,6 +90,110 @@ def _extract_text_output(result: dict[str, object]) -> str:
     return output_text
 
 
+def _clip_text(value: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        raise ValueError("max_chars must be greater than 0.")
+    text = value.strip()
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return f"{text[: max_chars - 3].rstrip()}..."
+
+
+def _compact_history(
+    existing_summary: str,
+    history_to_compact: list[dict[str, str]],
+    max_summary_chars: int,
+) -> str:
+    if max_summary_chars <= 0:
+        raise ValueError("max_summary_chars must be greater than 0.")
+
+    summary_lines: list[str] = []
+    if existing_summary.strip():
+        summary_lines.append(existing_summary.strip())
+
+    for message in history_to_compact:
+        role = message["role"].upper()
+        content = _clip_text(message["content"], 180)
+        if content:
+            summary_lines.append(f"- {role}: {content}")
+
+    merged_summary = "\n".join(summary_lines).strip()
+    return _clip_text(merged_summary, max_summary_chars)
+
+
+def _build_agent_messages(
+    user_input: str,
+    history_summary: str,
+    recent_history: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    if history_summary.strip():
+        messages.append(
+            {
+                "role": "system",
+                "content": "Conversation summary from previous turns:\n" + history_summary.strip(),
+            }
+        )
+    messages.extend(recent_history)
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
+def _is_memory_instruction(user_input: str) -> bool:
+    normalized = user_input.strip().lower()
+    memory_starts = (
+        "remember this",
+        "remember that",
+        "keep in mind",
+        "note this",
+        "note that",
+        "from now on",
+    )
+    return normalized.startswith(memory_starts)
+
+
+def _build_memory_ack(user_input: str) -> str:
+    remembered_text = _clip_text(user_input, 240)
+    return (
+        "Noted. I will keep this preference for the current session:\n"
+        f"- {remembered_text}\n"
+        "I will not run any query until you ask for analysis."
+    )
+
+
+def _extract_token_usage(result: dict[str, object]) -> tuple[int, int, int]:
+    messages = result.get("messages")
+    if not isinstance(messages, list):
+        raise RuntimeError("Agent response does not contain a valid 'messages' list for token usage.")
+
+    last_ai_message: object | None = None
+    for message in reversed(messages):
+        if getattr(message, "type", "") == "ai":
+            last_ai_message = message
+            break
+
+    if last_ai_message is None:
+        raise RuntimeError("Agent response does not contain an AI message for token usage.")
+
+    usage_metadata = getattr(last_ai_message, "usage_metadata", None)
+    if not isinstance(usage_metadata, dict):
+        raise RuntimeError("AI message does not include usage_metadata for token usage logging.")
+
+    input_tokens = usage_metadata.get("input_tokens")
+    output_tokens = usage_metadata.get("output_tokens")
+    total_tokens = usage_metadata.get("total_tokens")
+    if not isinstance(input_tokens, int) or input_tokens < 0:
+        raise RuntimeError("Invalid input_tokens in usage_metadata.")
+    if not isinstance(output_tokens, int) or output_tokens < 0:
+        raise RuntimeError("Invalid output_tokens in usage_metadata.")
+    if not isinstance(total_tokens, int) or total_tokens < 0:
+        raise RuntimeError("Invalid total_tokens in usage_metadata.")
+
+    return input_tokens, output_tokens, total_tokens
+
+
 def _validate_required_tools(
     selected_skills: tuple[SkillDefinition, ...],
     available_tool_names: tuple[str, ...],
@@ -142,9 +246,13 @@ def run_cli() -> None:
     cache_max_size = _read_positive_int_env("AGENT_CACHE_MAX_SIZE", 8)
     max_skills = _read_positive_int_env("AGENT_MAX_SKILLS", 2)
     max_prompt_chars = _read_positive_int_env("AGENT_MAX_PROMPT_CHARS", 6000)
+    memory_turns = _read_positive_int_env("AGENT_MEMORY_TURNS", 3)
+    memory_summary_max_chars = _read_positive_int_env("AGENT_MEMORY_SUMMARY_MAX_CHARS", 2000)
     available_tool_names = ("list_table", "table_info", "execute_query")
     llm = ChatNVIDIA(model=model_name, nvidia_api_key=nvidia_api_key, temperature=0.0)
     agent_cache: OrderedDict[tuple[str, ...], tuple[object, float]] = OrderedDict()
+    conversation_history: list[dict[str, str]] = []
+    history_summary = ""
 
     print("Database analysis agent is ready. Type 'exit' to quit.")
     while True:
@@ -155,6 +263,41 @@ def run_cli() -> None:
         if not user_input:
             continue
         request_started_at = perf_counter()
+        if _is_memory_instruction(user_input):
+            output_text = _build_memory_ack(user_input)
+            conversation_history.append({"role": "user", "content": user_input})
+            conversation_history.append({"role": "assistant", "content": output_text})
+            append_event(
+                event_path=event_log_path,
+                event={
+                    "query": user_input,
+                    "event_type": "memory_instruction",
+                    "selected_skill_ids": [],
+                    "included_skill_ids": [],
+                    "truncated_skill_ids": [],
+                    "dropped_skill_ids": [],
+                    "prompt_chars": 0,
+                    "cache_key": ["__memory_only__"],
+                    "cache_hit": False,
+                    "cache_size": len(agent_cache),
+                    "cache_ttl_seconds": cache_ttl_seconds,
+                    "cache_max_size": cache_max_size,
+                    "cache_expired_evictions": 0,
+                    "cache_lru_evictions": 0,
+                    "max_skills": max_skills,
+                    "max_prompt_chars": max_prompt_chars,
+                    "memory_turns": memory_turns,
+                    "history_summary_chars": len(history_summary),
+                    "history_messages_sent": 0,
+                    "required_tool_names": [],
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "latency_ms": int((perf_counter() - request_started_at) * 1000),
+                },
+            )
+            print(output_text)
+            continue
         prompt_result, selected_skills = _build_dynamic_system_prompt(
             user_input=user_input,
             skills_dir=skills_dir,
@@ -177,8 +320,27 @@ def run_cli() -> None:
             ttl_seconds=cache_ttl_seconds,
             max_cache_size=cache_max_size,
         )
-        response = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
+        recent_window_size = memory_turns * 2
+        history_to_keep = conversation_history[-recent_window_size:]
+        history_to_compact = conversation_history[:-recent_window_size]
+        if history_to_compact:
+            history_summary = _compact_history(
+                existing_summary=history_summary,
+                history_to_compact=history_to_compact,
+                max_summary_chars=memory_summary_max_chars,
+            )
+            conversation_history = history_to_keep
+
+        request_messages = _build_agent_messages(
+            user_input=user_input,
+            history_summary=history_summary,
+            recent_history=conversation_history,
+        )
+        response = agent.invoke({"messages": request_messages})
         output_text = _extract_text_output(response)
+        prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
+        conversation_history.append({"role": "user", "content": user_input})
+        conversation_history.append({"role": "assistant", "content": output_text})
         append_event(
             event_path=event_log_path,
             event={
@@ -197,7 +359,13 @@ def run_cli() -> None:
                 "cache_lru_evictions": lru_evictions,
                 "max_skills": max_skills,
                 "max_prompt_chars": max_prompt_chars,
+                "memory_turns": memory_turns,
+                "history_summary_chars": len(history_summary),
+                "history_messages_sent": len(request_messages),
                 "required_tool_names": list(required_tool_names),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
                 "latency_ms": int((perf_counter() - request_started_at) * 1000),
             },
         )

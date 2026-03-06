@@ -21,8 +21,11 @@ agent-analysis-db/
 │   └── test_skill_router.py
 ├── skills/
 │   ├── manifest.json
+│   ├── data_quality_checker.md
 │   ├── query_builder.md
-│   └── schema_analyzer.md
+│   ├── schema_analyzer.md
+│   ├── segment_analyzer.md
+│   └── time_series_analyst.md
 └── tools/
     ├── execute_query.py
     ├── list_table.py
@@ -61,16 +64,46 @@ AGENT_CACHE_TTL_SECONDS=900
 AGENT_CACHE_MAX_SIZE=8
 AGENT_MAX_SKILLS=2
 AGENT_MAX_PROMPT_CHARS=6000
+AGENT_MEMORY_TURNS=3
+AGENT_MEMORY_SUMMARY_MAX_CHARS=2000
 ```
 
 If `DB_PATH` is not set, `main.py` defaults to local `chinook.db` in this project.
 If `AGENT_CACHE_TTL_SECONDS` or `AGENT_CACHE_MAX_SIZE` is not set, defaults are `900` and `8`.
 If `AGENT_MAX_SKILLS` or `AGENT_MAX_PROMPT_CHARS` is not set, defaults are `2` and `6000`.
+If `AGENT_MEMORY_TURNS` or `AGENT_MEMORY_SUMMARY_MAX_CHARS` is not set, defaults are `3` and `2000`.
 
 ## Run
 
 ```bash
 python main.py
+```
+
+## Runtime Flow
+
+```text
+Start
+  |
+  v
+Receive user question
+  |
+  v
+Route relevant skills
+  |
+  v
+Build prompt (budget-aware)
+  |
+  v
+Get cached agent by skill set (TTL + LRU)
+  |
+  v
+Attach memory (recent turns + compact summary)
+  |
+  v
+Run tools and return answer
+  |
+  v
+Write telemetry log (skills, cache, latency, tokens)
 ```
 
 Type questions in plain English, for example:
@@ -93,7 +126,11 @@ Exit with:
 - System prompt is composed dynamically by `core/prompt_builder.py` with selected skills only and context budget handling.
 - Selected skills now validate `required_tools` from `skills/manifest.json` against registered agent tools.
 - Agent instances are cached by active skill combination with TTL + LRU eviction.
+- Conversation context keeps recent turns and compacts older turns into a bounded summary.
 - Request telemetry is written to `logs/agent_events.jsonl` via `core/observability.py`.
 - Skill files:
+- `skills/data_quality_checker.md`
   - `skills/schema_analyzer.md`
   - `skills/query_builder.md`
+- `skills/segment_analyzer.md`
+- `skills/time_series_analyst.md`

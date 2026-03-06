@@ -44,6 +44,73 @@
         "execute_query"
       ],
       "max_chars": 1600
+    },
+    {
+      "id": "time_series_analyst",
+      "file": "time_series_analyst.md",
+      "description": "Analyze time-based metrics, growth, and trends.",
+      "when_to_use": [
+        "trend",
+        "time series",
+        "over time",
+        "year over year",
+        "yoy",
+        "month over month",
+        "mom",
+        "monthly",
+        "quarterly",
+        "daily",
+        "growth",
+        "decline"
+      ],
+      "priority": 85,
+      "required_tools": [
+        "execute_query"
+      ],
+      "max_chars": 1600
+    },
+    {
+      "id": "data_quality_checker",
+      "file": "data_quality_checker.md",
+      "description": "Check nulls, duplicates, and consistency before analysis.",
+      "when_to_use": [
+        "quality",
+        "null",
+        "missing",
+        "duplicate",
+        "inconsistent",
+        "invalid",
+        "clean",
+        "accuracy",
+        "completeness"
+      ],
+      "priority": 80,
+      "required_tools": [
+        "execute_query"
+      ],
+      "max_chars": 1600
+    },
+    {
+      "id": "segment_analyzer",
+      "file": "segment_analyzer.md",
+      "description": "Break down metrics by segment, cohort, or category.",
+      "when_to_use": [
+        "segment",
+        "cohort",
+        "group",
+        "grouped",
+        "breakdown",
+        "per",
+        "by country",
+        "by genre",
+        "by customer",
+        "distribution"
+      ],
+      "priority": 78,
+      "required_tools": [
+        "execute_query"
+      ],
+      "max_chars": 1600
     }
   ]
 }
