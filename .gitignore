@@ -4,3 +4,4 @@ run_checks.py
 *.pyc
 tests/
 logs/
+preferences.json

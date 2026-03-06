@@ -15,3 +15,8 @@ Minimum output:
 - Main tables used.
 - Join keys between tables.
 - Relevant metric and dimension columns.
+
+Example:
+User: "What tables are related to customers?"
+Steps: list_table → table_info(Customer) → table_info(Invoice)
+Answer: Customer links to Invoice via CustomerId. Invoice links to InvoiceLine via InvoiceId.

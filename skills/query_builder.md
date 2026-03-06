@@ -16,3 +16,8 @@ Working rules:
 Minimum output:
 - Query results (rows/columns).
 - Final SQL query.
+
+Example:
+User: "How many tracks cost more than $1?"
+Steps: execute_query("SELECT COUNT(*) AS count FROM Track WHERE UnitPrice > 1.0")
+Answer: 42 tracks cost more than $1.00. | SQL: SELECT COUNT(*) AS count FROM Track WHERE UnitPrice > 1.0

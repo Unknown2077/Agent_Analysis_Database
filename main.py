@@ -10,6 +10,15 @@ from langchain.agents import create_agent
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from core.agent_cache import get_or_create_cached_agent
+from core.memory_utils import (
+    build_agent_messages as _build_agent_messages,
+    build_memory_ack as _build_memory_ack,
+    clear_tool_results as _clear_tool_results,
+    compact_history_with_llm as _compact_history_with_llm,
+    is_memory_instruction as _is_memory_instruction,
+    load_preferences as _load_preferences,
+    store_preference as _store_preference,
+)
 from core.observability import append_event
 from core.prompt_builder import PromptBuildResult, build_system_prompt
 from core.skill_loader import SkillDefinition, load_skill_manifest, read_skill_content
@@ -88,79 +97,6 @@ def _extract_text_output(result: dict[str, object]) -> str:
     if not output_text:
         raise RuntimeError("Agent returned empty output.")
     return output_text
-
-
-def _clip_text(value: str, max_chars: int) -> str:
-    if max_chars <= 0:
-        raise ValueError("max_chars must be greater than 0.")
-    text = value.strip()
-    if len(text) <= max_chars:
-        return text
-    if max_chars <= 3:
-        return text[:max_chars]
-    return f"{text[: max_chars - 3].rstrip()}..."
-
-
-def _compact_history(
-    existing_summary: str,
-    history_to_compact: list[dict[str, str]],
-    max_summary_chars: int,
-) -> str:
-    if max_summary_chars <= 0:
-        raise ValueError("max_summary_chars must be greater than 0.")
-
-    summary_lines: list[str] = []
-    if existing_summary.strip():
-        summary_lines.append(existing_summary.strip())
-
-    for message in history_to_compact:
-        role = message["role"].upper()
-        content = _clip_text(message["content"], 180)
-        if content:
-            summary_lines.append(f"- {role}: {content}")
-
-    merged_summary = "\n".join(summary_lines).strip()
-    return _clip_text(merged_summary, max_summary_chars)
-
-
-def _build_agent_messages(
-    user_input: str,
-    history_summary: str,
-    recent_history: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
-    if history_summary.strip():
-        messages.append(
-            {
-                "role": "system",
-                "content": "Conversation summary from previous turns:\n" + history_summary.strip(),
-            }
-        )
-    messages.extend(recent_history)
-    messages.append({"role": "user", "content": user_input})
-    return messages
-
-
-def _is_memory_instruction(user_input: str) -> bool:
-    normalized = user_input.strip().lower()
-    memory_starts = (
-        "remember this",
-        "remember that",
-        "keep in mind",
-        "note this",
-        "note that",
-        "from now on",
-    )
-    return normalized.startswith(memory_starts)
-
-
-def _build_memory_ack(user_input: str) -> str:
-    remembered_text = _clip_text(user_input, 240)
-    return (
-        "Noted. I will keep this preference for the current session:\n"
-        f"- {remembered_text}\n"
-        "I will not run any query until you ask for analysis."
-    )
 
 
 def _extract_token_usage(result: dict[str, object]) -> tuple[int, int, int]:
@@ -253,6 +189,8 @@ def run_cli() -> None:
     agent_cache: OrderedDict[tuple[str, ...], tuple[object, float]] = OrderedDict()
     conversation_history: list[dict[str, str]] = []
     history_summary = ""
+    preferences_path = Path(__file__).parent / "preferences.json"
+    user_preferences: list[str] = _load_preferences(preferences_path)
 
     print("Database analysis agent is ready. Type 'exit' to quit.")
     while True:
@@ -264,6 +202,7 @@ def run_cli() -> None:
             continue
         request_started_at = perf_counter()
         if _is_memory_instruction(user_input):
+            _store_preference(user_preferences, user_input, preferences_path=preferences_path)
             output_text = _build_memory_ack(user_input)
             conversation_history.append({"role": "user", "content": user_input})
             conversation_history.append({"role": "assistant", "content": output_text})
@@ -324,9 +263,11 @@ def run_cli() -> None:
         history_to_keep = conversation_history[-recent_window_size:]
         history_to_compact = conversation_history[:-recent_window_size]
         if history_to_compact:
-            history_summary = _compact_history(
+            cleared_history = _clear_tool_results(history_to_compact)
+            history_summary = _compact_history_with_llm(
+                llm=llm,
                 existing_summary=history_summary,
-                history_to_compact=history_to_compact,
+                history_to_compact=cleared_history,
                 max_summary_chars=memory_summary_max_chars,
             )
             conversation_history = history_to_keep
@@ -335,6 +276,7 @@ def run_cli() -> None:
             user_input=user_input,
             history_summary=history_summary,
             recent_history=conversation_history,
+            preferences=user_preferences,
         )
         response = agent.invoke({"messages": request_messages})
         output_text = _extract_text_output(response)

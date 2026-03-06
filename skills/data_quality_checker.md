@@ -15,3 +15,8 @@ Minimum output:
 - Quality check summary table(s).
 - Clear issue list with counts (or confirm no issue found).
 - Final SQL query per check.
+
+Example:
+User: "Are there null emails in customers?"
+Steps: execute_query("SELECT COUNT(*) AS null_count FROM Customer WHERE Email IS NULL")
+Answer: 0 customers have null email — no issues found.

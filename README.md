@@ -8,17 +8,17 @@ Minimal database analysis agent using LangChain + NVIDIA NIM over SQLite (`chino
 agent-analysis-db/
 ├── main.py
 ├── chinook.db
+├── preferences.json
 ├── requirements.txt
 ├── .env.example
 ├── core/
+│   ├── __init__.py
 │   ├── agent_cache.py
+│   ├── memory_utils.py
 │   ├── observability.py
 │   ├── prompt_builder.py
 │   ├── skill_loader.py
 │   └── skill_router.py
-├── tests/
-│   ├── test_agent_cache.py
-│   └── test_skill_router.py
 ├── skills/
 │   ├── manifest.json
 │   ├── data_quality_checker.md
@@ -26,10 +26,12 @@ agent-analysis-db/
 │   ├── schema_analyzer.md
 │   ├── segment_analyzer.md
 │   └── time_series_analyst.md
-└── tools/
-    ├── execute_query.py
-    ├── list_table.py
-    └── table_info.py
+├── tools/
+│   ├── execute_query.py
+│   ├── list_table.py
+│   └── table_info.py
+└── logs/
+    └── agent_events.jsonl
 ```
 
 ## Prerequisites
@@ -68,10 +70,17 @@ AGENT_MEMORY_TURNS=3
 AGENT_MEMORY_SUMMARY_MAX_CHARS=2000
 ```
 
-If `DB_PATH` is not set, `main.py` defaults to local `chinook.db` in this project.
-If `AGENT_CACHE_TTL_SECONDS` or `AGENT_CACHE_MAX_SIZE` is not set, defaults are `900` and `8`.
-If `AGENT_MAX_SKILLS` or `AGENT_MAX_PROMPT_CHARS` is not set, defaults are `2` and `6000`.
-If `AGENT_MEMORY_TURNS` or `AGENT_MEMORY_SUMMARY_MAX_CHARS` is not set, defaults are `3` and `2000`.
+| Variable | Default | Description |
+|---|---|---|
+| `NVIDIA_API_KEY` | *(required)* | NVIDIA NIM API key |
+| `NVIDIA_MODEL` | `meta/llama-3.1-70b-instruct` | Model endpoint |
+| `DB_PATH` | `./chinook.db` | Path to SQLite database |
+| `AGENT_CACHE_TTL_SECONDS` | `900` | Agent cache time-to-live |
+| `AGENT_CACHE_MAX_SIZE` | `8` | Max cached agent instances |
+| `AGENT_MAX_SKILLS` | `2` | Max skills per request |
+| `AGENT_MAX_PROMPT_CHARS` | `6000` | System prompt character budget |
+| `AGENT_MEMORY_TURNS` | `3` | Recent conversation turns kept in full |
+| `AGENT_MEMORY_SUMMARY_MAX_CHARS` | `2000` | Max characters for compacted history summary |
 
 ## Run
 
@@ -82,55 +91,50 @@ python main.py
 ## Runtime Flow
 
 ```text
-Start
-  |
-  v
-Receive user question
-  |
-  v
-Route relevant skills
-  |
-  v
-Build prompt (budget-aware)
-  |
-  v
-Get cached agent by skill set (TTL + LRU)
-  |
-  v
-Attach memory (recent turns + compact summary)
-  |
-  v
-Run tools and return answer
-  |
-  v
-Write telemetry log (skills, cache, latency, tokens)
+User Input
+  │
+  ├─► Memory instruction? ──► Store preference (preferences.json) ──► Ack
+  │
+  └─► Analysis query
+        │
+        ├─► Route relevant skills (manifest.json + keyword scoring)
+        ├─► Build system prompt (budget-aware, with few-shot examples)
+        ├─► Get/create cached agent (TTL + LRU by skill set)
+        │
+        ├─► Memory pipeline:
+        │     ├─► Clear tool results from old turns
+        │     ├─► LLM-based compaction (rule-based fallback)
+        │     └─► Inject preferences + summary + recent turns
+        │
+        ├─► Invoke agent (tools: list_table, table_info, execute_query)
+        └─► Log telemetry (logs/agent_events.jsonl)
 ```
 
-Type questions in plain English, for example:
+Example queries:
 
 - `List all tables in this database.`
-- `Show table_info for the Customer table.`
 - `Top 5 genres by total sales revenue.`
+- `Show yearly revenue trend.`
+- `Are there null emails in customers?`
+- `remember I prefer results in markdown table format`
 
-Exit with:
+Exit with `exit` or `quit`.
 
-- `exit`
-- `quit`
+## Tests
 
-## Notes
+```bash
+python -m pytest tests/ -v
+```
+
+94 tests covering: tools, skill routing, prompt building, agent caching, memory utilities (compaction, preferences, tool clearing), observability, and live agent simulation.
+
+## Architecture Notes
 
 - `execute_query` only allows `SELECT` queries.
-- This project targets latest LangChain (`langchain` package in `requirements.txt`).
-- Python 3.14 may show compatibility warnings in some transitive dependencies.
-- Skills are selected per user request using `skills/manifest.json` + `core/skill_router.py`.
-- System prompt is composed dynamically by `core/prompt_builder.py` with selected skills only and context budget handling.
-- Selected skills now validate `required_tools` from `skills/manifest.json` against registered agent tools.
-- Agent instances are cached by active skill combination with TTL + LRU eviction.
-- Conversation context keeps recent turns and compacts older turns into a bounded summary.
-- Request telemetry is written to `logs/agent_events.jsonl` via `core/observability.py`.
-- Skill files:
-- `skills/data_quality_checker.md`
-  - `skills/schema_analyzer.md`
-  - `skills/query_builder.md`
-- `skills/segment_analyzer.md`
-- `skills/time_series_analyst.md`
+- Skills are selected per request via `skills/manifest.json` + `core/skill_router.py`.
+- System prompt is composed dynamically by `core/prompt_builder.py` with structured sections (Role, Tools, Exploration Strategy, Output Format, Examples) and selected skill content within a character budget.
+- Agent instances are cached by active skill combination with TTL + LRU eviction (`core/agent_cache.py`).
+- Conversation memory keeps recent turns in full and compacts older turns via LLM-based summarization with rule-based fallback (`core/memory_utils.py`).
+- Tool results are cleared from old history before compaction to reduce context noise.
+- User preferences (e.g., "always show SQL") are persisted to `preferences.json` and survive restarts.
+- Request telemetry (skills, cache stats, token usage, latency) is appended to `logs/agent_events.jsonl`.

@@ -15,3 +15,8 @@ Minimum output:
 - Time-bucketed result table.
 - Short trend interpretation (increasing, decreasing, or mixed).
 - Final SQL query.
+
+Example:
+User: "Show yearly revenue trend"
+Steps: execute_query("SELECT strftime('%Y',InvoiceDate) AS year, SUM(Total) AS revenue FROM Invoice GROUP BY year ORDER BY year")
+Answer: [year|revenue table] Revenue grew steadily from 2009 to 2013.

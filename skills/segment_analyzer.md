@@ -15,3 +15,8 @@ Minimum output:
 - Segment comparison table.
 - Short insight on top and bottom segments.
 - Final SQL query.
+
+Example:
+User: "Revenue by country, top 5"
+Steps: execute_query("SELECT BillingCountry, SUM(Total) AS revenue FROM Invoice GROUP BY BillingCountry ORDER BY revenue DESC LIMIT 5")
+Answer: [country|revenue table] USA leads with the highest revenue.
