@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+
+class MemoryCompactionError(RuntimeError):
+    """Raised when LLM-based history compaction fails."""
+
+
 MAX_PREFERENCES = 10
 MAX_PREFERENCE_CHARS = 200
 TOOL_RESULT_PLACEHOLDER = "[tool result cleared]"
@@ -103,17 +108,64 @@ def compact_history_with_llm(
 
     try:
         response = llm.invoke(prompt)  # type: ignore[union-attr]
-        summary_text = ""
-        if hasattr(response, "content"):
-            summary_text = response.content  # type: ignore[union-attr]
-        elif isinstance(response, str):
-            summary_text = response
-        summary_text = summary_text.strip()
-        if not summary_text:
-            return compact_history(existing_summary, history_to_compact, max_summary_chars)
-        return clip_text(summary_text, max_summary_chars)
-    except Exception:
-        return compact_history(existing_summary, history_to_compact, max_summary_chars)
+    except Exception as exc:
+        raise MemoryCompactionError(
+            f"LLM compaction failed: {exc!s}. "
+            "Action: verify NVIDIA_API_KEY, model endpoint, and network."
+        ) from exc
+
+    summary_text = ""
+    if hasattr(response, "content"):
+        summary_text = response.content  # type: ignore[union-attr]
+    elif isinstance(response, str):
+        summary_text = response
+    summary_text = summary_text.strip()
+    if not summary_text:
+        raise MemoryCompactionError(
+            "LLM compaction returned empty summary. "
+            "Action: inspect model response and prompt budget."
+        )
+    return clip_text(summary_text, max_summary_chars)
+
+
+def select_relevant_context_notes(
+    user_input: str,
+    history_summary: str,
+    max_items: int = 5,
+    max_chars: int = 800,
+) -> str:
+    if max_items <= 0 or max_chars <= 0:
+        raise ValueError("max_items and max_chars must be greater than 0.")
+    summary = history_summary.strip()
+    if not summary:
+        return ""
+
+    lines = [line.strip() for line in summary.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    user_words = set(w.lower() for w in user_input.split() if len(w) > 1)
+    scored: list[tuple[int, int, str]] = []
+    for idx, line in enumerate(lines):
+        line_lower = line.lower()
+        score = sum(1 for w in user_words if w in line_lower)
+        scored.append((score, idx, line))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    selected: list[str] = []
+    total_chars = 0
+    for _, _, line in scored[:max_items]:
+        line_len = len(line) + 1
+        if total_chars + line_len > max_chars:
+            break
+        selected.append(line)
+        total_chars += line_len
+
+    if not selected:
+        selected = [clip_text(lines[0], max_chars)]
+
+    return "Relevant context from previous turns:\n" + "\n".join(selected)
 
 
 def build_agent_messages(
@@ -121,44 +173,50 @@ def build_agent_messages(
     history_summary: str,
     recent_history: list[dict[str, str]],
     preferences: list[str] | None = None,
+    context_notes_max_items: int = 5,
+    context_notes_max_chars: int = 800,
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     pref_block = build_preference_context(preferences or [])
     if pref_block:
         messages.append({"role": "system", "content": pref_block})
     if history_summary.strip():
-        messages.append(
-            {
-                "role": "system",
-                "content": "Conversation summary from previous turns:\n" + history_summary.strip(),
-            }
+        notes = select_relevant_context_notes(
+            user_input=user_input,
+            history_summary=history_summary,
+            max_items=context_notes_max_items,
+            max_chars=context_notes_max_chars,
         )
+        if notes:
+            messages.append({"role": "system", "content": notes})
     messages.extend(recent_history)
     messages.append({"role": "user", "content": user_input})
     return messages
 
 
-def is_memory_instruction(user_input: str) -> bool:
-    normalized = user_input.strip().lower()
-    memory_starts = (
-        "remember",
-        "keep in mind",
-        "note this",
-        "note that",
-        "from now on",
-        "always ",
-        "never ",
-        "i prefer",
-        "i want you to",
-    )
-    return normalized.startswith(memory_starts)
+def parse_pref_command(user_input: str) -> str | None:
+    """If input is a valid /pref command, return payload to store. None if not a command.
+    Raises ValueError if format valid but payload empty."""
+    stripped = user_input.strip()
+    if not stripped.lower().startswith("/pref"):
+        return None
+    rest = stripped[5:].strip()
+    if rest.lower().startswith("add"):
+        payload = rest[3:].strip()
+    else:
+        payload = rest
+    if not payload:
+        raise ValueError(
+            "Preference command requires non-empty text. Use: /pref add <text> or /pref <text>"
+        )
+    return clip_text(payload, MAX_PREFERENCE_CHARS)
 
 
-def build_memory_ack(user_input: str) -> str:
-    remembered_text = clip_text(user_input, 240)
+def build_memory_ack(preference_text: str) -> str:
+    displayed = clip_text(preference_text, 240)
     return (
         "Noted. I will keep this preference:\n"
-        f"- {remembered_text}\n"
+        f"- {displayed}\n"
         "I will not run any query until you ask for analysis."
     )
 
